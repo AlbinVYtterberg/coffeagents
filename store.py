@@ -1,7 +1,7 @@
 """Inventory (lager.md), supplier quotes, our prices, and the sales ledger (sales.md)."""
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).parent
@@ -12,6 +12,9 @@ STATE_FILE = DATA / "state.json"
 
 # How much below the cheapest competitor we price, per unit.
 UNDERCUT = 0.01
+# No competitor quote this long after we asked? Price at our cost plus DEFAULT_MARKUP instead.
+QUOTE_WAIT = timedelta(minutes=5)
+DEFAULT_MARKUP = 0.30  # 30 % profit on top of our buy price
 
 INVENTORY_LINE = re.compile(
     r"^(?P<qty>\d+(?:\.\d+)?)\s+(?:(?P<qty_unit>kg|liter|l)\s+)?(?P<name>.+?),"
@@ -104,12 +107,21 @@ def _set_quantity(item: str, qty: float) -> None:
 # ---------- prices ----------
 
 def our_price(state: dict, item: str) -> tuple[float | None, str]:
-    """(price, explanation). Undercut the cheapest quote, but never sell below cost."""
+    """(price, explanation). Undercut the cheapest quote, but never sell below cost.
+
+    Without any quote: None while we wait for suppliers (or haven't asked yet), then
+    cost + DEFAULT_MARKUP once QUOTE_WAIT has passed since we asked.
+    """
     quotes = state["quotes"].get(item, {})
-    if not quotes:
-        return None, "no supplier quote yet"
-    cheapest_supplier, cheapest = min(quotes.items(), key=lambda kv: kv[1]["price"])
     cost = read_inventory()[item]["cost"]
+    if not quotes:
+        asked = state["inquiries"].get(item)
+        if asked is None:
+            return None, "no supplier quote yet (suppliers not asked yet)"
+        if datetime.now() - datetime.fromisoformat(asked) < QUOTE_WAIT:
+            return None, "no supplier quote yet (waiting for reply)"
+        return round(cost * (1 + DEFAULT_MARKUP), 2), f"no competitor quote; our cost + {DEFAULT_MARKUP:.0%}"
+    cheapest_supplier, cheapest = min(quotes.items(), key=lambda kv: kv[1]["price"])
     price = round(cheapest["price"] - UNDERCUT, 2)
     if price < cost:
         return cost, f"at cost floor (cheapest competitor {cheapest['price']} from {cheapest_supplier})"
