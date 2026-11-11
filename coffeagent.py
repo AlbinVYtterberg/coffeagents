@@ -1,15 +1,17 @@
 """Sales agent for our café-supply company.
 
-Run:      .venv\\Scripts\\python.exe coffeagent.py          (polls the inbox until Ctrl+C)
+Run:      .venv\\Scripts\\python.exe coffeagent.py          (checks the inbox every 5 s until Ctrl+C)
 Once:     .venv\\Scripts\\python.exe coffeagent.py --once   (one inbox check, then exit)
 Earnings: .venv\\Scripts\\python.exe coffeagent.py earnings
 """
+import os
 import sys
 import time
 from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 from langchain.agents import create_agent
+from langchain.chat_models import init_chat_model
 from langchain.tools import tool
 
 import store
@@ -17,8 +19,14 @@ from mailer import OUR_ADDRESS, OUR_NAME, fetch_new_mail, send_mail
 
 load_dotenv()
 
+# An empty ANTHROPIC_AUTH_TOKEN (some terminals set one) makes the SDK send an invalid
+# "Authorization: Bearer " header and every call fails with "Connection error". Drop empty ones.
+for _name in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"):
+    if _name in os.environ and not os.environ[_name].strip():
+        del os.environ[_name]
+
 MODEL = "anthropic:claude-sonnet-4-6"
-POLL_SECONDS = 30
+POLL_SECONDS = 5
 PRICE_REFRESH = timedelta(hours=1)      # re-ask suppliers when our newest quote for an item is older than this
 INQUIRY_COOLDOWN = timedelta(hours=1)   # don't re-ask a supplier about an item sooner than this
 PENDING_MAX_AGE = timedelta(hours=24)   # give up on a deferred café request after this
@@ -170,11 +178,20 @@ How to handle emails:
 Finish with a one-line summary of what you did."""
 
 agent = create_agent(
-    model=MODEL,
+    model=init_chat_model(MODEL, max_retries=5, timeout=120),
     tools=[list_inventory, request_supplier_prices, record_supplier_price,
            send_email_to_cafe, record_sale, defer_reply, calculate_earnings],
     system_prompt=SYSTEM_PROMPT,
 )
+
+
+def describe_error(e: BaseException) -> str:
+    """Error type and message, plus the chain of underlying causes (e.g. the real network error)."""
+    parts = []
+    while e is not None and len(parts) < 5:
+        parts.append(f"{type(e).__name__}: {e}")
+        e = e.__cause__ or e.__context__
+    return "\n   caused by ".join(parts)
 
 
 def run_agent(task: str) -> str:
@@ -222,7 +239,7 @@ def check_inbox() -> None:
                 if handle(mail, retry=True):
                     state["pending"].append(mail)
             except Exception as e:
-                print(f"[{store.now()}] Error retrying mail from {mail['sender']}: {e}")
+                print(f"[{store.now()}] Error retrying mail from {mail['sender']}: {describe_error(e)}")
                 state["pending"].append(mail)
         store.save_state(state)
 
@@ -239,14 +256,14 @@ def main() -> None:
         try:
             # Keep checking competitor prices: on start, then every PRICE_REFRESH.
             if last_refresh is None or datetime.now() - last_refresh > PRICE_REFRESH:
-                last_refresh = datetime.now()
                 print(f"[{store.now()}] Price check ->", run_agent(
                     f"Today is {store.now()}. Price check: call list_inventory. For every item with NO PRICE "
                     "or a STALE quote, request current prices from the supplier that carries it "
                     "(one email per supplier). Don't email cafés."))
+                last_refresh = datetime.now()
             check_inbox()
         except Exception as e:  # keep the agent alive on network/API hiccups
-            print(f"[{store.now()}] Error: {e}")
+            print(f"[{store.now()}] Error: {describe_error(e)}")
         if "--once" in sys.argv:
             break
         time.sleep(POLL_SECONDS)
