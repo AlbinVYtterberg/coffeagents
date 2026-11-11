@@ -12,4 +12,9 @@ Using langchain, set up an agent that:
 - sees its storage in lager.md 
 - send mail to other suppliers (suppliers.md) to figure out their price
 - set prices to a fractionally lower price then the other suppliers
-- receive mail from cafe (cafe.md is the only ok mailadresses), give them a price suggestion that is fractionally lower
+- receive mail from cafe (cafe.md is the only ok mailadresses), give them a price suggestion that is fractionally lower then the lowest other supplier
+- when cafe buys from us, note how much they bought, who bought it, when, and what price
+- calculate earnings
+
+- keep checking the other suppliers prices
+- never sell below our buy-price
