@@ -19,11 +19,31 @@ from mailer import OUR_ADDRESS, OUR_NAME, fetch_new_mail, send_mail
 
 load_dotenv()
 
-# An empty ANTHROPIC_AUTH_TOKEN (some terminals set one) makes the SDK send an invalid
-# "Authorization: Bearer " header and every call fails with "Connection error". Drop empty ones.
-for _name in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"):
-    if _name in os.environ and not os.environ[_name].strip():
-        del os.environ[_name]
+
+
+def _ensure_api_key() -> bool:
+    """Make sure ANTHROPIC_API_KEY is in this process's environment.
+
+    A terminal opened before the key was saved in Windows doesn't see it. LangChain then sends an
+    empty key, which fails as "Connection error ... Illegal header value b'Bearer '". So fall back
+    to the key saved in the Windows user environment (registry).
+    """
+    if os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        return True
+    if sys.platform == "win32":
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+                value = str(winreg.QueryValueEx(key, "ANTHROPIC_API_KEY")[0]).strip()
+        except OSError:
+            value = ""
+        if value:
+            os.environ["ANTHROPIC_API_KEY"] = value
+            return True
+    return False
+
+
+HAS_API_KEY = _ensure_api_key()
 
 MODEL = "anthropic:claude-sonnet-4-6"
 POLL_SECONDS = 5
@@ -248,6 +268,9 @@ def main() -> None:
     if "earnings" in sys.argv:
         print(store.earnings_report())
         return
+
+    if not HAS_API_KEY:
+        sys.exit("ANTHROPIC_API_KEY is not set. Set it as a Windows environment variable or in a .env file.")
 
     print(f"{OUR_NAME} agent started ({OUR_ADDRESS}).")
     last_refresh = None
