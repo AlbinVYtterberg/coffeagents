@@ -5,3 +5,8 @@ agent = create_agent(
 )
 result = agent.invoke({"messages": [{"content": "<PROMPT>"}]})
 print(result["messages"][-1].content_blocks[0]["text"])
+
+
+you sell stuff to cafe:s
+Using langchain, set up an agent that:
+- sees its storage in lager.md 
